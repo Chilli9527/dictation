@@ -116,7 +116,9 @@ bash check-deps.sh
 ├── references/
 │   ├── permissions.md
 │   └── troubleshooting.md
-└── assets/hero.svg
+└── assets/
+    ├── hero.svg
+    └── screenshot.png
 ```
 
 ## 當 Skill 用
