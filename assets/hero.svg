@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" width="1200" height="380" role="img" aria-label="Dictation — 本機 Whisper 聽寫">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="55%" stop-color="#111a24"/>
+      <stop offset="100%" stop-color="#0b1a17"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4ade80"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4ade80" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.25"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="380" fill="url(#bg)"/>
+  <g opacity="0.07" stroke="#ffffff" stroke-width="1">
+    <path d="M0 60H1200M0 120H1200M0 180H1200M0 240H1200M0 300H1200M0 360H1200"/>
+    <path d="M60 0V380M180 0V380M300 0V380M420 0V380M540 0V380M660 0V380M780 0V380M900 0V380M1020 0V380M1140 0V380"/>
+  </g>
+
+  <circle cx="1042" cy="96" r="190" fill="#4ade80" opacity="0.05"/>
+  <circle cx="1120" cy="300" r="140" fill="#38bdf8" opacity="0.05"/>
+
+  <g transform="translate(72,96)">
+    <rect x="0" y="0" width="34" height="34" rx="9" fill="url(#accent)"/>
+    <path d="M17 8.5a4.2 4.2 0 0 1 4.2 4.2v4.6a4.2 4.2 0 1 1-8.4 0v-4.6A4.2 4.2 0 0 1 17 8.5Z" fill="#0d1117"/>
+    <path d="M9.8 17.6a7.2 7.2 0 0 0 14.4 0" stroke="#0d1117" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M17 24.8V27" stroke="#0d1117" stroke-width="2" stroke-linecap="round"/>
+
+    <text x="52" y="27" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif"
+          font-size="26" font-weight="700" fill="#f0f6fc" letter-spacing="0.5">Dictation</text>
+
+    <text x="0" y="86" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif"
+          font-size="46" font-weight="800" fill="#f0f6fc" letter-spacing="-0.5">撳一下，講嘢，再撳一下。</text>
+
+    <text x="0" y="130" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif"
+          font-size="21" fill="#8b98a5">本機 Whisper 辨識 · 錄音唔出機 · 零訂閱 · 開源</text>
+
+    <g transform="translate(0,170)">
+      <rect x="0" y="0" width="152" height="42" rx="21" fill="#ffffff" opacity="0.06"/>
+      <text x="18" y="27" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif"
+            font-size="16" fill="#d0d7de">⌥ 撳一下 Option</text>
+
+      <rect x="168" y="0" width="120" height="42" rx="21" fill="#ffffff" opacity="0.06"/>
+      <text x="186" y="27" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif"
+            font-size="16" fill="#d0d7de">講一句</text>
+
+      <rect x="304" y="0" width="196" height="42" rx="21" fill="#ffffff" opacity="0.06"/>
+      <text x="322" y="27" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif"
+            font-size="16" fill="#d0d7de">再撳一下 → 出字</text>
+    </g>
+  </g>
+
+  <g transform="translate(760,120)" opacity="0.95">
+    <rect x="0" y="0" width="368" height="150" rx="16" fill="#ffffff" opacity="0.04" stroke="#ffffff" stroke-opacity="0.08"/>
+    <g stroke="url(#wave)" stroke-width="5" stroke-linecap="round">
+      <line x1="34"  y1="75" x2="34"  y2="75"/>
+      <line x1="56"  y1="60" x2="56"  y2="90"/>
+      <line x1="78"  y1="44" x2="78"  y2="106"/>
+      <line x1="100" y1="58" x2="100" y2="92"/>
+      <line x1="122" y1="30" x2="122" y2="120"/>
+      <line x1="144" y1="52" x2="144" y2="98"/>
+      <line x1="166" y1="66" x2="166" y2="84"/>
+      <line x1="188" y1="38" x2="188" y2="112"/>
+      <line x1="210" y1="56" x2="210" y2="94"/>
+      <line x1="232" y1="70" x2="232" y2="80"/>
+      <line x1="254" y1="48" x2="254" y2="102"/>
+      <line x1="276" y1="64" x2="276" y2="86"/>
+      <line x1="298" y1="74" x2="298" y2="76"/>
+      <line x1="320" y1="58" x2="320" y2="92"/>
+      <line x1="342" y1="72" x2="342" y2="78"/>
+    </g>
+    <text x="34" y="132" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif"
+          font-size="13" fill="#8b98a5">whisper.cpp · ggml-large-v3-turbo</text>
+  </g>
+
+  <g transform="translate(72,330)">
+    <text x="0" y="0" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif"
+          font-size="14" fill="#6e7b8a">Swift + AppKit · macOS 13+ · universal (arm64 + x86_64) · MIT</text>
+  </g>
+</svg>

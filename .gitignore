@@ -1,0 +1,14 @@
+# build 產出
+dist/
+build/
+*.disabled
+
+# 備份
+*.bak
+*.bak-*
+
+# macOS
+.DS_Store
+
+# 個人 key（永遠唔好 commit）
+*_key
