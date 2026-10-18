@@ -16,6 +16,7 @@ import AppKit
 import AVFoundation
 import ApplicationServices
 import Carbon.HIToolbox
+import CoreAudio
 import SwiftUI
 import Foundation
 
@@ -562,6 +563,15 @@ enum Prefs {
         get { UserDefaults.standard.bool(forKey: "autoPaste") }
         set { UserDefaults.standard.set(newValue, forKey: "autoPaste") }
     }
+    /// 錄音時自動靜音其他聲音（睇片／聽歌唔會漏入咪，亦唔會嘈住你講）
+    /// 預設開 —— 同 Spokenly 一樣。第一次讀唔到 key 就當 true。
+    static var muteOthers: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: "muteOthers") == nil { return true }
+            return UserDefaults.standard.bool(forKey: "muteOthers")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "muteOthers") }
+    }
     static var cleanFillers: Bool {
         get { UserDefaults.standard.bool(forKey: "cleanFillers") }
         set { UserDefaults.standard.set(newValue, forKey: "cleanFillers") }
@@ -932,6 +942,224 @@ final class SoundFX {
             if let b = tone(f, d) { player.scheduleBuffer(b, completionHandler: nil) }
         }
         if !player.isPlaying { player.play() }
+    }
+}
+
+// ---------------- 錄音時靜音其他聲音 ----------------
+/// 用戶 2026-10-18：「錄音嘅時候，佢自己會 mute 咗其他聲音…Spokenly 有呢個功能」
+///
+/// 做法：用 CoreAudio HAL 將**預設輸出裝置**靜音，錄完即刻還原。
+///
+/// 點解唔逐個 App 靜音？macOS 14.4 起雖然有 `AudioHardwareCreateProcessTap`
+/// 可以逐個 process mute，但要用 aggregate device，對「錄音時唔想有聲」呢個需求
+/// 嚟講太重。整機靜音 100% 可靠、零權限、即時生效。
+///
+/// 三條保險，防止「靜音之後冇還原」（最痛嘅後果：部機從此冇聲）：
+///   ① 錄完即刻還原 —— 而且**喺播停止音之前**，所以聽得到提示音
+///   ② App 結束（applicationWillTerminate）再還原一次
+///   ③ 靜音前先將原本音量寫落 `~/.cache/dictation-work/muted.json`；
+///      下次啟動見到呢個檔就即刻還原（crash／強制退出／拔電都救得返）
+enum SystemAudio {
+    /// 一組「還原資訊」
+    struct Saved {
+        let device: UInt32
+        let muted: Bool?                    // 用 mute 屬性（nil = 唔支援，改用 volume）
+        let volumes: [UInt32: Float32]      // element → 原本音量
+    }
+
+    private static var active: [UInt32: Saved] = [:]
+    private static var mutedAt: Date?          // 幾時開始靜音（用嚟擋住 timer 搶先一步）
+    private static let statePath = kWorkDir + "/muted.json"
+
+    // MARK: - 基本 HAL 讀寫
+
+    static func defaultOutput() -> UInt32? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var dev: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
+        return (err == noErr && dev != 0) ? dev : nil
+    }
+
+    private static func addr(_ sel: AudioObjectPropertySelector, _ el: UInt32) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: sel,
+                                   mScope: kAudioObjectPropertyScopeOutput,
+                                   mElement: el)
+    }
+
+    private static func getMute(_ dev: UInt32) -> Bool? {
+        var a = addr(kAudioDevicePropertyMute, kAudioObjectPropertyElementMain)
+        guard AudioObjectHasProperty(AudioObjectID(dev), &a) else { return nil }
+        var v: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(AudioObjectID(dev), &a, 0, nil, &size, &v)
+        return err == noErr ? (v != 0) : nil
+    }
+
+    @discardableResult
+    private static func setMute(_ dev: UInt32, _ on: Bool) -> Bool {
+        var a = addr(kAudioDevicePropertyMute, kAudioObjectPropertyElementMain)
+        guard AudioObjectHasProperty(AudioObjectID(dev), &a) else { return false }
+        var v: UInt32 = on ? 1 : 0
+        let size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectSetPropertyData(AudioObjectID(dev), &a, 0, nil, size, &v) == noErr
+    }
+
+    private static func getVolume(_ dev: UInt32, _ el: UInt32) -> Float32? {
+        var a = addr(kAudioDevicePropertyVolumeScalar, el)
+        guard AudioObjectHasProperty(AudioObjectID(dev), &a) else { return nil }
+        var v: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        let err = AudioObjectGetPropertyData(AudioObjectID(dev), &a, 0, nil, &size, &v)
+        return err == noErr ? v : nil
+    }
+
+    @discardableResult
+    private static func setVolume(_ dev: UInt32, _ el: UInt32, _ v: Float32) -> Bool {
+        var a = addr(kAudioDevicePropertyVolumeScalar, el)
+        guard AudioObjectHasProperty(AudioObjectID(dev), &a) else { return false }
+        var val = v
+        let size = UInt32(MemoryLayout<Float32>.size)
+        return AudioObjectSetPropertyData(AudioObjectID(dev), &a, 0, nil, size, &val) == noErr
+    }
+
+    /// 有啲裝置（AirPods／HDMI／部分 USB DAC）冇 main element，要逐條 channel 改
+    private static func elements(_ dev: UInt32) -> [UInt32] {
+        if getVolume(dev, kAudioObjectPropertyElementMain) != nil {
+            return [kAudioObjectPropertyElementMain]
+        }
+        return [1, 2].filter { getVolume(dev, $0) != nil }
+    }
+
+    // MARK: - 靜音 / 還原
+
+    @discardableResult
+    static func mute(_ dev: UInt32) -> Bool {
+        if active[dev] != nil { return true }          // 已經處理過
+        // 首選 mute 屬性：唔會改動用戶設定嘅音量數字
+        if let m = getMute(dev), setMute(dev, true) {
+            active[dev] = Saved(device: dev, muted: m, volumes: [:])
+            return true
+        }
+        // 次選：音量歸零
+        var vols: [UInt32: Float32] = [:]
+        var ok = false
+        for el in elements(dev) {
+            if let v = getVolume(dev, el) {
+                vols[el] = v
+                if setVolume(dev, el, 0) { ok = true }
+            }
+        }
+        if ok {
+            active[dev] = Saved(device: dev, muted: nil, volumes: vols)
+        } else {
+            DLog.w("⚠️ 靜音失敗：裝置 \(dev) 冇 mute 亦冇 volume 屬性")
+        }
+        return ok
+    }
+
+    static func restore(_ dev: UInt32) {
+        guard let s = active[dev] else { return }
+        if let m = s.muted {
+            setMute(dev, m)
+        }
+        for (el, v) in s.volumes {
+            // 用戶喺錄音期間自己調過音量 → 尊重佢，唔還原
+            if let now = getVolume(dev, el), now > 0.001 { continue }
+            setVolume(dev, el, v)
+        }
+        active[dev] = nil
+        if active.isEmpty { mutedAt = nil }
+    }
+
+    /// 開始錄音時叫：靜音目前嘅預設輸出裝置
+    static func muteForRecording() {
+        guard let dev = defaultOutput() else {
+            DLog.w("⚠️ 搵唔到預設輸出裝置，唔靜音")
+            return
+        }
+        guard active[dev] == nil else { return }   // 0.7 秒 timer 快一步靜咗，唔好重複
+        if mute(dev) {
+            mutedAt = Date()
+            persist()
+            DLog.w("🔇 已靜音其他聲音（device \(dev)）")
+        }
+    }
+
+    /// 錄完叫：全部還原
+    static func restoreAfterRecording() {
+        guard !active.isEmpty else { return }
+        for dev in Array(active.keys) { restore(dev) }
+        mutedAt = nil
+        clearPersist()
+        DLog.w("🔊 已還原聲音")
+    }
+
+    /// 錄音期間每 0.7 秒叫一次：換咗輸出裝置（插耳機／AirPods）就順手靜音埋新嗰個
+    static func ensureCurrentDeviceMuted() {
+        // 頭 0.8 秒唔好做嘢 —— beginRecording 會喺 0.14 秒後自己靜音，
+        // 呢個 timer 搶先嘅話就會誤報「換咗輸出裝置」。
+        guard let t = mutedAt, Date().timeIntervalSince(t) > 0.8 else { return }
+        guard let dev = defaultOutput() else { return }
+        if active[dev] == nil, mute(dev) {
+            persist()
+            DLog.w("🔇 換咗輸出裝置，已靜音新裝置（device \(dev)）")
+        }
+    }
+
+    static var isMuted: Bool { !active.isEmpty }
+
+    /// 自測用：一句講晒目前裝置嘅狀態
+    static func describe(_ dev: UInt32) -> String {
+        let m = getMute(dev).map { $0 ? "mute" : "unmute" } ?? "冇 mute 屬性"
+        var vols: [String] = []
+        for el in elements(dev) {
+            if let v = getVolume(dev, el) { vols.append("el\(el)=\(String(format: "%.2f", v))") }
+        }
+        return "device \(dev) · \(m) · \(vols.isEmpty ? "冇 volume 屬性" : vols.joined(separator: " "))"
+    }
+
+    // MARK: - Crash 保險
+
+    private static func persist() {
+        var obj: [String: Any] = [:]
+        for (dev, s) in active {
+            var d: [String: Any] = [:]
+            if let m = s.muted { d["muted"] = m }
+            if !s.volumes.isEmpty {
+                var v: [String: Double] = [:]
+                for (el, val) in s.volumes { v[String(el)] = Double(val) }
+                d["volumes"] = v
+            }
+            obj[String(dev)] = d
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        try? data.write(to: URL(fileURLWithPath: statePath))
+    }
+
+    private static func clearPersist() {
+        try? FileManager.default.removeItem(atPath: statePath)
+    }
+
+    /// App 啟動時叫：上次如果死喺錄音中途，幫佢還原
+    static func recoverFromCrash() {
+        guard let data = FileManager.default.contents(atPath: statePath),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        for (key, value) in obj {
+            guard let dev = UInt32(key), let d = value as? [String: Any] else { continue }
+            if let m = d["muted"] as? Bool { setMute(dev, m) }
+            if let vols = d["volumes"] as? [String: Double] {
+                for (el, val) in vols {
+                    if let e = UInt32(el) { setVolume(dev, e, Float32(val)) }
+                }
+            }
+            DLog.w("🩹 救返上次未還原嘅靜音（device \(dev)）")
+        }
+        clearPersist()
     }
 }
 
@@ -1933,6 +2161,14 @@ final class Controller {
             state = .recording
             RecordingHUD.shared.show()
             SoundFX.shared.playStart()     // 「開始」提示音（同錄音同時，唔會漏開頭）
+            // 靜音其他聲音：要等提示音播完（125ms）先落手，
+            // 否則連自己個「嘟‑嗶」都會靜埋，用戶就聽唔到「開始咗」。
+            if Prefs.muteOthers {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) { [weak self] in
+                    guard let self = self, self.state == .recording else { return }
+                    SystemAudio.muteForRecording()
+                }
+            }
         } catch {
             onError?("錄音失敗：\(error.localizedDescription)")
         }
@@ -1943,6 +2179,8 @@ final class Controller {
         state = .working
         busy = true
         workingSince = Date()
+        // 🔴 先還原聲音，再播停止音 —— 否則停止音自己都會被靜音
+        SystemAudio.restoreAfterRecording()
         SoundFX.shared.playStop()          // 「停止」提示音
         // 停止录音後保留同一個簡約 HUD，顯示「轉寫中…」；辨識完成才先收起，
         // 再把文字貼回原輸入位置，讓用戶知道 App 仍在處理。
@@ -2033,6 +2271,7 @@ struct MainView: View {
     @State private var dsModel: String = Prefs.deepseekModel
     @State private var fidelity: Int = Prefs.fidelity
     @State private var autoPaste: Bool = Prefs.autoPaste
+    @State private var muteOthers: Bool = Prefs.muteOthers
 
     var body: some View {
         // 可滾動：內容越加越多，要確保細屏／Sidecar 都睇到晒
@@ -2167,6 +2406,17 @@ struct MainView: View {
                 Text("呢個係 macOS 系統機制：自動打字必須開「輔助使用」。未開嘅話辨識完會彈窗教你。")
                     .font(.caption2)
                     .foregroundColor(.secondary)
+
+                Toggle("錄音時自動靜音其他聲音（睇片／聽歌唔會漏入咪）", isOn: $muteOthers)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: muteOthers) { v in
+                        Prefs.muteOthers = v
+                        AppDelegate.shared.rebuildMenu()
+                    }
+                Text("撳 Option 開始錄 → 系統輸出靜音；錄完即刻還原。中途插耳機／轉 AirPods 都會跟住靜音。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if let e = CleanupEngine(rawValue: engine), e == .apple {
                     Text("Apple 內建 AI：免費、離線、唔使 API key。目前狀態：\(CleanService.appleStatus())")
@@ -2644,12 +2894,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DLog.w("主選單已建立：" + main.items.map { $0.submenu?.title ?? $0.title }.joined(separator: " / "))
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // 保險 ②：如果仲喺錄音中途就 quit／登出，唔可以留低「部機冇聲」呢個狀態
+        SystemAudio.restoreAfterRecording()
+        DLog.w("=== applicationWillTerminate：已還原聲音（如有）===")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DLog.w("=== applicationDidFinishLaunching ===")
         Prefs.register()
         AppDelegate.shared = self
         buildMainMenu()
         SoundFX.shared.prepare()          // 預熱音效引擎，第一次撳 Option 唔會有延遲
+        SystemAudio.recoverFromCrash()    // 上次死喺錄音中途 → 幫佢還原聲音
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         DLog.w("statusItem created: \(statusItem != nil)")
@@ -2770,6 +3027,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             wasListen = nowListen
             DLog.w("tick a11y=\(nowTrusted ? "✅" : "❌") listen=\(nowListen ? "✅" : "❌") mic=\(mic)")
             MainWindow.shared.reload()
+        }
+
+        // 錄音期間每 0.7 秒檢查一次：換咗輸出裝置（插耳機／AirPods）就順手靜音埋新嗰個，
+        // 否則新裝置會照樣出聲，靜音等於白做。
+        Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { _ in
+            guard Prefs.muteOthers, Controller.shared.state == .recording else { return }
+            SystemAudio.ensureCurrentDeviceMuted()
         }
 
         // 自我測試觸發（三選一）：
@@ -2973,6 +3237,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         paste.state = Prefs.autoPaste ? .on : .off
         menu.addItem(paste)
 
+        let mute = NSMenuItem(title: "錄音時靜音其他聲音", action: #selector(toggleMute), keyEquivalent: "")
+        mute.target = self
+        mute.state = Prefs.muteOthers ? .on : .off
+        menu.addItem(mute)
+
         // 「去口語詞」只對 AI 大整理模式有意義；執字粒模式本身一定會清口語詞，
         // 擺個冇作用嘅開關出嚟只會令人混亂，所以唔顯示。
         if CleanupEngine.current == .apple || CleanupEngine.current == .gpt4omini {
@@ -3105,6 +3374,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func togglePaste() {
         Prefs.autoPaste.toggle()
         rebuildMenu()
+    }
+
+    @objc func toggleMute() {
+        Prefs.muteOthers.toggle()
+        // 由「開」變「關」嗰陣如果正在靜音，即刻還原，唔好等錄完
+        if !Prefs.muteOthers { SystemAudio.restoreAfterRecording() }
+        rebuildMenu()
+        MainWindow.shared.reload()
     }
 
     @objc func toggleClean() {
@@ -3373,6 +3650,23 @@ if CommandLine.arguments.contains("--test-sound") {
     SoundFX.shared.playStop()
     RunLoop.current.run(until: Date().addingTimeInterval(1.2))
     print("完成（如果聽到兩聲『嘟‑嘟』就正常）")
+    exit(0)
+}
+
+// 靜音自測：Dictation --test-mute   （靜音 2 秒後還原，順便驗證 crash 保險檔）
+if CommandLine.arguments.contains("--test-mute") {
+    setvbuf(stdout, nil, _IONBF, 0)
+    guard let dev = SystemAudio.defaultOutput() else {
+        print("✗ 搵唔到預設輸出裝置")
+        exit(1)
+    }
+    print("原本：  \(SystemAudio.describe(dev))")
+    SystemAudio.muteForRecording()
+    print("靜音後：\(SystemAudio.describe(dev))")
+    print("（等 2 秒…如果耳機／喇叭真係冇聲就正常）")
+    RunLoop.current.run(until: Date().addingTimeInterval(2.0))
+    SystemAudio.restoreAfterRecording()
+    print("還原後：\(SystemAudio.describe(dev))")
     exit(0)
 }
 

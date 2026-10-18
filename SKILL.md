@@ -76,9 +76,22 @@ bash check-deps.sh
 1. 游標擺喺任何輸入位置（WhatsApp／郵件／瀏覽器）
 2. 撳一下觸發鍵（預設 **Option**，左右都收）→ 聽到「嘟‑嗶」向上
 3. 講嘢
-4. 再撳一下 → 聽到「嗶‑嘟」向下 → 文字自動貼上
+4. 再撳一次 → 聽到「嗶‑嘟」向下 → 文字自動貼上
 
 觸發方式可揀「撳一次開始／再撳一次完結」（toggle）或「按住講、鬆手停」（hold）。
+
+### 🔇 錄音時靜音其他聲音（預設開）
+
+睇住片都可以直接撳 Option 講嘢：開始錄音時會將**預設輸出裝置**靜音，錄完即刻還原。
+
+- 用 `kAudioDevicePropertyMute`（唔會改動你嘅音量數字）；裝置唔支援就退為音量歸零
+- 提示音係喺靜音**之前**播（延遲 0.14 秒才靜音），所以「開始」音聽得到；
+  停止時係**先還原再播**停止音
+- 錄音中途換輸出裝置（插耳機／AirPods）→ 0.7 秒 timer 會跟住靜音新裝置
+- 三條防「部機從此冇聲」保險：錄完即還原、`applicationWillTerminate` 再還原、
+  `~/.cache/dictation-work/muted.json` crash 保險檔（下次啟動自動解返）
+- 主視窗 checkbox 或選單列「錄音時靜音其他聲音」可關掉
+- 自測：`Dictation --test-mute`（靜音 2 秒後還原，會印出裝置狀態）
 
 ## 文字清理：五個引擎
 
@@ -122,6 +135,7 @@ NO_INSTALL=1 ./build.sh    # 只編譯
 ```bash
 D=./dist/Dictation.app/Contents/MacOS/Dictation
 $D --test-sound                          # 播開始／停止提示音
+$D --test-mute                           # 靜音 2 秒後還原，印出裝置狀態
 POLISH_TEST="原文" $D --test-polish      # 執字粒 + 雜訊過濾 + 字形轉換
 $D --test-guard                          # 守門六個回歸案例
 DEEPSEEK_TEST="原文" $D --test-deepseek  # 規則層 vs DeepSeek 對比 + 耗時

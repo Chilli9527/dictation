@@ -225,3 +225,53 @@ NSScreen.screens.first(where: { $0.frame.origin == .zero })
 另外用 `"response_format": {"type": "json_object"}` 逼佢只回 `{"text": "..."}`，
 天然冇前言／客套話。任何失敗（無 key／401／逾時 6 秒／改動過大）→ 自動退回規則版，
 **唔可以卡住用戶貼字**。
+
+---
+
+## 15. 靜音其他聲音：最怕「靜完冇還原」
+
+需求：錄音時將其他聲音靜音（睇住片都可以直接講嘢）。
+
+做法：用 CoreAudio HAL 靜音**預設輸出裝置**。
+
+```swift
+// 首選：mute 屬性（唔會改動用戶設定嘅音量數字）
+var addr = AudioObjectPropertyAddress(
+    mSelector: kAudioDevicePropertyMute,
+    mScope: kAudioObjectPropertyScopeOutput,
+    mElement: kAudioObjectPropertyElementMain)
+AudioObjectSetPropertyData(dev, &addr, 0, nil, size, &one)
+
+// 次選（AirPods／HDMI／部分 USB DAC 冇 mute 屬性）：音量歸零
+kAudioDevicePropertyVolumeScalar  // 注意 main element 可能冇，要試 element 1 / 2
+```
+
+### 三個坑
+
+**① 靜音會連自己嘅提示音都靜埋**
+
+`AVAudioEngine` 出嘅「嘟‑嗶」都係去同一個輸出裝置。
+→ 開始：**先播提示音，0.14 秒後才靜音**。
+→ 停止：**先還原，再播停止音**。次序反轉就兩個音都聽唔到。
+
+**② 0.7 秒嘅裝置檢查 timer 會搶先一步**
+
+timer 同 `beginRecording` 嘅延遲靜音同時跑，會出現
+「換咗輸出裝置，已靜音新裝置」呢個假警報（同一部裝置 log 兩次）。
+→ 記住 `mutedAt`，靜音後 0.8 秒內 timer 唔做嘢。
+
+**③ crash／強制退出 → 部機從此冇聲（最痛）**
+
+三條保險：
+
+1. 錄完即刻還原
+2. `applicationWillTerminate` 再還原一次
+3. 靜音前先寫 `~/.cache/dictation-work/muted.json`（記住**原本**狀態），
+   下次啟動 `recoverFromCrash()` 見到就即刻解返
+
+⚠️ 保險檔記嘅係「原本狀態」，唔係「現在要 mute」。
+如果原本就係 mute，還原後仍然係 mute —— 呢個係正確行為，唔係 bug。
+
+**④ 用戶喺錄音期間自己調音量**
+
+還原嗰陣如果發現當前音量已經唔係 0，代表用戶自己調過 → **唔好還原**，尊重佢。
