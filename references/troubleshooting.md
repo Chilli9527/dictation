@@ -275,3 +275,38 @@ timer 同 `beginRecording` 嘅延遲靜音同時跑，會出現
 **④ 用戶喺錄音期間自己調音量**
 
 還原嗰陣如果發現當前音量已經唔係 0，代表用戶自己調過 → **唔好還原**，尊重佢。
+
+---
+
+## 16. 換模型提高準確度（turbo → 完整版 large-v3）
+
+需求：由「講話到文字」要準確。
+
+**事實先講清楚**：`ggml-large-v3-turbo-q5_0.bin` **本身就係 Whisper**（large-v3-turbo，
+OpenAI 官方剪枝版）。唔存在「Whisper 另一個模型」嘅分別，只有 turbo vs 完整版。
+
+| | turbo | 完整版 large-v3 |
+|---|---|---|
+| 解碼器 | 4 層 | 32 層 |
+| 大小 | 547MB | 1.08GB |
+| 速度（M4 Pro） | 每句約 0.6s | 每句約 1.2s |
+| 實測錯誤 | `長遠`→`長青`、`WorkBuddy`→`Wabuddy`、粵語出簡體 | 全部正確，直接出繁體 |
+
+ turbo 嘅解碼器被剪到 4 層 → 近音詞、中英夾雜、字形一致明顯變差。
+慢 2.3 倍但每句只多約 1 秒，聽寫嘅體感差唔多。**求準確就必修羅完整版。**
+
+```bash
+curl -L -o ~/.cache/dictation-models/ggml-large-v3-q5_0.bin \
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin"
+# 選單列「模型」即刻多一項（availableModels() 自動掃目錄），唔使重新編譯
+```
+
+官方 `ggml-large-v3-q5_0.bin` size = **1,081,140,203 bytes**（用嚟核實下載完整性）。
+
+### 雜訊幻覺會換樣
+
+換模型後，底噪吐嘅亂碼會由全大寫拉丁（`PENGASPEN`）變成**顏文字同符號**
+（實測完整版對住環境噪聲吐 `╯︵ ┻━┻`）。
+→ `isGarbage()` 要覆蓋「**冇任何字母或數字**」呢類（純符號輸出永遠唔係真內容）。
+留意 `$0.isLetter` 對數字係 false，所以要 `isLetter || isNumber`，
+否則 `1234` 會被誤殺。

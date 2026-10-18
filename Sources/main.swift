@@ -552,7 +552,9 @@ enum Prefs {
         set { UserDefaults.standard.set(newValue, forKey: "triggerMode") }
     }
     static var model: String {
-        get { UserDefaults.standard.string(forKey: "model") ?? "ggml-large-v3-turbo-q5_0.bin" }
+        // 預設完整版 large-v3（解碼器 32 層，比 turbo 嘅 4 層準好多：近音詞／中英夾雜／繁體字形）。
+        // 想快啲可以喺選單列「模型」改揀 ggml-large-v3-turbo-q5_0.bin（快 2.3 倍，準確度稍遜）。
+        get { UserDefaults.standard.string(forKey: "model") ?? "ggml-large-v3-q5_0.bin" }
         set { UserDefaults.standard.set(newValue, forKey: "model") }
     }
     static var language: String {
@@ -1297,6 +1299,9 @@ enum CleanService {
         }
         if hasCJK { return false }
         guard t.count <= 20 else { return false }
+        // 純符號／顏文字／假名裝飾輸出（噪音幻覺，實測完整版 large-v3 對住底噪會吐 ╯︵ ┻━┻）
+        let hasLetterOrDigit = t.contains { $0.isLetter || $0.isNumber }
+        if !hasLetterOrDigit { return true }
         let hasUpper = t.contains { $0.isUppercase }
         let hasLower = t.contains { $0.isLowercase }
         return hasUpper && !hasLower

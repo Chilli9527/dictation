@@ -41,9 +41,19 @@ install.sh 會依次做：
 |---|---|---|
 | 1 | 檢查 macOS 13+、Xcode Command Line Tools | 會自動彈 `xcode-select --install` |
 | 2 | 裝 whisper.cpp（`brew install whisper-cpp`） | 冇 Homebrew 會叫你裝 |
-| 3 | 下載模型 `ggml-large-v3-turbo-q5_0.bin`（547MB）到 `~/.cache/dictation-models/` | 只下載一次 |
+| 3 | 下載模型 `ggml-large-v3-q5_0.bin`（1.08GB）到 `~/.cache/dictation-models/` | 只下載一次 |
 | 4 | `build.sh` 編譯 universal binary（arm64 + x86_64）＋ 簽名 | 見下面「簽名」 |
 | 5 | 安裝去 `/Applications/Dictation.app` | 冇權限就手動拖 |
+
+### 模型揀擇（2026-10-18 實測）
+
+| 模型 | 解碼器 | 大小 | 速度（M4 Pro） | 準確度 |
+|---|---|---|---|---|
+| `ggml-large-v3-q5_0.bin`（**預設**） | 32 層 | 1.08GB | 每句約 1.2s | ⭐ 近音詞／中英夾雜／繁體字形明顯較準 |
+| `ggml-large-v3-turbo-q5_0.bin` | 4 層（剪枝） | 547MB | 每句約 0.6s（快 2.3 倍） | 稍遜：實測 `長遠`→`長青`、`WorkBuddy`→`Wabuddy`、粵語出簡體字 |
+
+只下載 turbo：`MODEL=ggml-large-v3-turbo-q5_0.bin bash install.sh`。
+兩個模型可以同時存在，選單列「模型」隨時切換。
 
 想用自己嘅 bundle id（同作者嘅機唔撞）：
 

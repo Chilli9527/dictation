@@ -5,17 +5,21 @@
 #  做四件事：
 #    1. 檢查系統（macOS 版本、Xcode Command Line Tools、Homebrew）
 #    2. 裝 whisper.cpp（冇裝先裝）
-#    3. 下載 Whisper 模型（547MB，只下載一次）
+#    3. 下載 Whisper 模型（1.08GB，只下載一次）
 #    4. 編譯 + 簽名 + 裝去 /Applications
 #
 #  用法：  bash install.sh
+#  想快啲（用 turbo 模型，547MB，準確度稍遜）：
+#         MODEL=ggml-large-v3-turbo-q5_0.bin bash install.sh
 #  想用自己嘅 bundle id：BUNDLE_ID=com.yourname.dictation bash install.sh
 # ============================================================
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 
 MODEL_DIR="$HOME/.cache/dictation-models"
-MODEL="ggml-large-v3-turbo-q5_0.bin"
+# 預設用完整版 large-v3：解碼器 32 層（turbo 只有 4 層），
+# 近音詞、中英夾雜、繁體字形明顯較準。慢約 2.3 倍但每句只多約 1 秒。
+MODEL="${MODEL:-ggml-large-v3-q5_0.bin}"
 MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL"
 BUNDLE_ID="${BUNDLE_ID:-com.brucelam.dictation}"
 APP_NAME="Dictation"
@@ -86,7 +90,9 @@ if [ -f "$MODEL_DIR/$MODEL" ]; then
 fi
 
 if [ ! -f "$MODEL_DIR/$MODEL" ]; then
-  echo "  下載 ${MODEL}（547MB，一次性）…"
+  SIZE_HINT="1.08GB"
+  [ "$MODEL" = "ggml-large-v3-turbo-q5_0.bin" ] && SIZE_HINT="547MB"
+  echo "  下載 ${MODEL}（${SIZE_HINT}，一次性）…"
   echo "  存放位置：$MODEL_DIR"
   if curl -L --fail --progress-bar -o "$MODEL_DIR/$MODEL.part" "$MODEL_URL"; then
     mv "$MODEL_DIR/$MODEL.part" "$MODEL_DIR/$MODEL"

@@ -70,6 +70,18 @@ bash check-deps.sh
 
 想改觸發鍵：主視窗 → 快速設定 → 觸發鍵。
 
+## 模型：完整版 vs turbo
+
+預設用**完整版** `ggml-large-v3-q5_0`（1.08GB）。呢個先至係「準確」嗰個：
+
+| 模型 | 解碼器 | 大小 | 每句速度（M4 Pro 實測） | 準確度 |
+|---|---|---|---|---|
+| **ggml-large-v3-q5_0**（預設） | 32 層 | 1.08GB | 約 1.2 秒 | ⭐ 近音詞、中英夾雜、繁體字形明顯較準 |
+| ggml-large-v3-turbo-q5_0 | 4 層（剪枝） | 547MB | 約 0.6 秒 | 稍遜：實測 `長遠`→`長青`、`WorkBuddy`→`Wabuddy`、粵語出簡體 |
+
+> 兩者**都係 OpenAI Whisper**（turbo 只係官方剪枝加速版）。唔使重新下載兩次 ——
+> 兩個模型可以同時放喺 `~/.cache/dictation-models/`，選單列「模型」隨時切換。
+
 ![主視窗](assets/screenshot.png)
 
 ## 文字清理（五選一）
@@ -90,7 +102,7 @@ bash check-deps.sh
 | | |
 |---|---|
 | 語言 | Swift 5（AppKit + SwiftUI，單檔約 3300 行） |
-| 辨識 | [whisper.cpp](https://github.com/ggerganov/whisper.cpp) + `ggml-large-v3-turbo-q5_0`（547MB，16kHz mono） |
+| 辨識 | [whisper.cpp](https://github.com/ggerganov/whisper.cpp) + `ggml-large-v3-q5_0`（**1.08GB**，16kHz mono，Metal GPU，beam 5） |
 | 觸發 | `CGEventTap` 收修飾鍵 + 自動健康檢查／重建 |
 | 貼上 | `NSPasteboard` + `CGEvent` 模擬 Cmd+V |
 | 音效 | `AVAudioEngine` 即場合成正弦波 |
