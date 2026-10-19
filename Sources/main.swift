@@ -1937,6 +1937,72 @@ enum Paster {
         pb.setString(text, forType: .string)
     }
 
+    /// 貼字 + **還原用戶原本剪貼板**。
+    /// 聽寫要用剪貼板做中轉（macOS 唔俾 App 直接打字入第二個 App），
+    /// 但貼完之後原本嘅剪貼板內容要還返 —— 用戶可能之前複製咗啲嘢想用。
+    ///
+    /// 流程：深拷原本剪貼板（支援文字／圖片／檔案等多種類型）→ 寫入逐字稿
+    ///      → 模擬 Cmd+V → 等目標 App 讀完（0.8 秒）→ 還原
+    ///
+    /// 🔴 還原前一定會檢查 `changeCount`：呢段時間內用戶自己複製咗第樣嘢，
+    ///    就**唔還原**，避免覆蓋佢啱啱複製嘅內容。
+    /// 有待還原嘅剪貼板備份。連續兩次聽寫時，第二次要用返第一次嘅備份，
+    /// 唔係截取「第一次聽寫嘅文字」，否則用戶最初嘅內容會被中層文字頂替。
+    private static var pendingRestore: [NSPasteboardItem] = []
+    private static var pendingOwner: Int = 0
+    private static var pasteSeq: Int = 0
+
+    static func paste(_ text: String) {
+        let pb = NSPasteboard.general
+        pasteSeq += 1
+        let mySeq = pasteSeq
+        let backup = pendingRestore.isEmpty ? captureClipboard() : pendingRestore
+        pendingRestore = backup
+        pendingOwner = mySeq
+
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        let countAfterWrite = pb.changeCount
+
+        sendCommandV()
+
+        DLog.w("已貼字，0.8 秒後還原原本剪貼板（原本 \(backup.count) 項）")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            restoreClipboard(backup, afterChangeCount: countAfterWrite)
+            if pendingOwner == mySeq { pendingRestore = [] }
+        }
+    }
+
+    /// 深拷目前剪貼板所有項目。`pasteboardItems` 返嘅係即時參考，
+    /// `clearContents` 之後用會壞，所以要逐項 setData 抄一份。
+    static func captureClipboard() -> [NSPasteboardItem] {
+        let pb = NSPasteboard.general
+        guard let items = pb.pasteboardItems else { return [] }
+        var out: [NSPasteboardItem] = []
+        for it in items {
+            let copy = NSPasteboardItem()
+            for t in it.types {
+                if let d = it.data(forType: t) { copy.setData(d, forType: t) }
+            }
+            if !copy.types.isEmpty { out.append(copy) }
+        }
+        return out
+    }
+
+    /// 還原剪貼板；只有「冇人改過」先復原
+    static func restoreClipboard(_ items: [NSPasteboardItem], afterChangeCount: Int) {
+        let pb = NSPasteboard.general
+        guard pb.changeCount == afterChangeCount else {
+            DLog.w("剪貼板期間被改過，唔還原（尊重新內容）")
+            return
+        }
+        pb.clearContents()
+        if !items.isEmpty {
+            _ = pb.writeObjects(items)
+        }
+        DLog.w("已還原本剪貼板（\(items.count) 項）")
+    }
+
     static func sendCommandV() {
         guard let src = CGEventSource(stateID: .combinedSessionState) else { return }
         let vKey: CGKeyCode = 9 // V
@@ -2225,18 +2291,19 @@ final class Controller {
                     return
                 }
                 self.appendHistory(out)
-                Paster.copyToClipboard(out)
                 // 轉寫完成：先收起處理提示，再把文字貼入原本輸入位置。
                 RecordingHUD.shared.hide()
 
-                if Prefs.autoPaste {
-                    if AXIsProcessTrusted() {
-                        // 有輔助使用權限 → 模擬 Cmd+V，直接打入游標所在嘅對話框
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                            Paster.sendCommandV()
-                        }
-                    } else {
-                        // 冇權限 → macOS 根本唔俾自動打字，直接教用戶開（唔再叫佢自己貼）
+                if Prefs.autoPaste && AXIsProcessTrusted() {
+                    // 有輔助使用權限 → 貼字入游標所在 App，貼完還原用戶原本剪貼板
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        Paster.paste(out)
+                    }
+                } else {
+                    // 冇權限／閂咗自動貼上 → 文字留喺剪貼板等用戶自己貼
+                    Paster.copyToClipboard(out)
+                    if Prefs.autoPaste {
+                        // macOS 根本唔俾自動打字，教用戶開（唔再叫佢自己貼）
                         DLog.w("no a11y -> guidance, skip paste")
                         RecordingHUD.shared.hide()
                         showA11yGuidance()
@@ -2611,8 +2678,7 @@ struct MainView: View {
                     MainWindow.shared.hide()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         if AXIsProcessTrusted() {
-                            Paster.copyToClipboard("測試成功 — Dictation 自動打字運作中")
-                            Paster.sendCommandV()
+                            Paster.paste("測試成功 — Dictation 自動打字運作中")
                         } else {
                             showA11yGuidance()
                         }
@@ -3672,6 +3738,43 @@ if CommandLine.arguments.contains("--test-mute") {
     RunLoop.current.run(until: Date().addingTimeInterval(2.0))
     SystemAudio.restoreAfterRecording()
     print("還原後：\(SystemAudio.describe(dev))")
+    exit(0)
+}
+
+// 剪貼板自測：Dictation --test-clipboard
+// 驗證「貼字之後還原用戶原本內容」：寫入假剪貼板 → Paster.capture (深拷)
+// → 模擬一次寫入+還原 → 斷言原本內容返返嚟
+if CommandLine.arguments.contains("--test-clipboard") {
+    setvbuf(stdout, nil, _IONBF, 0)
+    let pb = NSPasteboard.general
+    // ① 放一啲原本內容（模擬用戶之前複製咗嘅嘢）
+    pb.clearContents()
+    pb.setString("用戶原本複製嘅內容", forType: .string)
+    print("① 原本剪貼板：\(pb.string(forType: .string) ?? "(nil)")")
+    // ② 摸擬貼字流程（呢度只測 capture／restore，唔送 Cmd+V）
+    let backup = Paster.captureClipboard()
+    pb.clearContents()
+    pb.setString("聽寫辨識出嚟嘅文字", forType: .string)
+    let countAfterWrite = pb.changeCount
+    print("② 貼字後剪貼板：\(pb.string(forType: .string) ?? "(nil)")")
+    // ③ 還原
+    Paster.restoreClipboard(backup, afterChangeCount: countAfterWrite)
+    let back = pb.string(forType: .string) ?? "(nil)"
+    print("③ 還原後剪貼板：\(back)")
+    print(back == "用戶原本複製嘅內容" ? "✅ 剪貼板正確還原" : "❌ 還原失敗")
+    // ④ 反向測試：期間用戶改過剪貼板 → 唔應該還原
+    pb.clearContents()
+    pb.setString("用戶原本內容 B", forType: .string)
+    let backup2 = Paster.captureClipboard()
+    pb.clearContents()
+    pb.setString("第二句聽寫文字", forType: .string)
+    let count2 = pb.changeCount
+    pb.clearContents()                                   // 模擬用戶自己複製咗別嘅
+    pb.setString("用戶啱啱複製嘅新內容", forType: .string)
+    Paster.restoreClipboard(backup2, afterChangeCount: count2)
+    let final = pb.string(forType: .string) ?? "(nil)"
+    print("④ 期間被改過，還原結果：\(final)")
+    print(final == "用戶啱啱複製嘅新內容" ? "✅ 正確：尊重用戶新內容" : "❌ 覆蓋咗用戶新內容")
     exit(0)
 }
 

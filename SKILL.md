@@ -146,6 +146,7 @@ NO_INSTALL=1 ./build.sh    # 只編譯
 D=./dist/Dictation.app/Contents/MacOS/Dictation
 $D --test-sound                          # 播開始／停止提示音
 $D --test-mute                           # 靜音 2 秒後還原，印出裝置狀態
+$D --test-clipboard                      # 剪貼板備份／還原四個斷言
 POLISH_TEST="原文" $D --test-polish      # 執字粒 + 雜訊過濾 + 字形轉換
 $D --test-guard                          # 守門六個回歸案例
 DEEPSEEK_TEST="原文" $D --test-deepseek  # 規則層 vs DeepSeek 對比 + 耗時

@@ -310,3 +310,45 @@ curl -L -o ~/.cache/dictation-models/ggml-large-v3-q5_0.bin \
 → `isGarbage()` 要覆蓋「**冇任何字母或數字**」呢類（純符號輸出永遠唔係真內容）。
 留意 `$0.isLetter` 對數字係 false，所以要 `isLetter || isNumber`，
 否則 `1234` 會被誤殺。
+
+---
+
+## 17. 貼字唔可以吃掉用戶嘅剪貼板
+
+需求：聽寫完自動貼入對話框，但用戶之前複製咗嘅嘢要保住。
+
+macOS 唔俾 App 直接打字入第二個 App（Accessibility 只係俾模擬按鍵），所以
+**必然要用剪貼板做中轉**：寫入 → 模擬 Cmd+V。問題係 `clearContents()` 會銷毀用戶
+原本嘅內容。
+
+### 做法：用完即還
+
+```swift
+// ① 深拷（pasteboardItems 返嘅係即時參考，必須逐項 setData 抄一份）
+static func captureClipboard() -> [NSPasteboardItem] { ... }
+
+// ② 還原前一定要查 changeCount —— 呢段時間用戶自己複製咗別嘅，就唔好覆蓋
+static func restoreClipboard(_ items: [NSPasteboardItem], afterChangeCount: Int) {
+    guard NSPasteboard.general.changeCount == afterChangeCount else { return }
+    ...
+}
+```
+
+三個實測要點：
+
+1. **多類型／多項目**：一個項目可以同時有 PNG + 文字，剪貼板亦可以有多個項目。
+   `setString` 只能存一種，所以備份要逐項逐 type 抄。實測 PNG + 兩個項目完整還原。
+2. **0.8 秒延遲**：等目標 App 讀完剪貼板先復原。Cmd+V 係同步貼，但慢 App
+   （瀏覽器、Electron）可能需要零點幾秒。
+3. 🔴 **連續兩次聽寫**：第二次要 `pendingRestore`（第一次嘅備份）做備份，
+   唔係截取當前剪貼板（＝第一次聽寫嘅文字）。否則用戶最初嘅內容會被
+   中層文字頂替。實測：錄音＋辨識至少要 1.5 秒，0.8 秒窗實務上唔會撞到，
+   但鏈式保護係免費嘅。
+
+### 反面情況
+
+- 閂咗「自動貼上」→ 剪貼板係唯一交付管道，**唔還原**（用戶要自己 Cmd+V）
+- 冇輔助使用權限 → 同樣留喺剪貼板 + 彈窗教開權限
+
+自測：`Dictation --test-clipboard`（四個斷言：正常還原／還原後內容正確／
+期間被改過要尊重／唔覆蓋）。
